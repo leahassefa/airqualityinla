@@ -41,4 +41,4 @@ Analysis of air quality trends in Los Angeles County (1987–2023) using EPA API
 - Register for an EPA API key and input your credentials
 - Configure scraping toggles and folders
 - Run the script top to bottom in R or RStudio
-** Full step-by-step instructions are included at the top of the R mar
+** Full step-by-step instructions are included at the top of the R markdown file named "air_quality_analysis**
