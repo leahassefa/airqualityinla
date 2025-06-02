@@ -1,0 +1,601 @@
+---
+title: "Air Quality in Los Angeles County"
+author: "Leah Assefa"
+date: "15/1/25"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+#### User Set-Up Code Chunk:
+
+```{r, message=FALSE, warning=FALSE}
+# User-specific Settings
+
+# Below are the packages necessary for all of the code chunks. If package is not already installed please use, install.packages("package name")
+
+library(RSelenium)
+library(rvest)
+library(dplyr) 
+library(wdman)
+library(httr)
+library(jsonlite)
+library(tidyr) 
+library(lubridate) 
+library(ggplot2)
+
+# File Paths for organizing project data (replace names if needed)
+data_dir <- file.path("data", "raw data") 
+derivative_data_dir <- file.path("data", "derivative data")
+output_dir <- file.path("data", "outputs")
+
+# Toggles for Re-scraping: this controls whether to rescrape or use existing data
+re_scrape_primary_data <- TRUE  # Set to FALSE if you don't want to scrape primary data again
+re_scrape_secondary_data <- TRUE  # Set to FALSE if you don't want to scrape secondary data again
+
+# API Authentication Information (follow directions on readme to register)
+api_key <- "your_api_key"  # Replace with your API key
+email <- "registered_email"  # Replace with your registered email
+
+# Defining filenames for input/output to ensure reproducibility (replace names if needed)
+primary_data_file_path_csv <- file.path(data_dir, "raw_data_LA_County_1987_2023.csv") # csv file for primary data
+
+primary_data_file_path_rds <- file.path(data_dir, "raw_data_LA_County_1987_2023.rds") # rds file for primary data
+
+secondary_data_file_path_csv <- file.path(data_dir, "air_quality_index_report_1987_2023.csv") #csv file for secondary data
+
+secondary_data_file_path_rds <- file.path(data_dir, "air_quality_index_report_1987_2023.rds") # rds file for secondary data
+```
+
+## 1. Introduction
+
+    Air quality issues in urban areas significantly impact public health, economic productivity, and quality of life. Prior research has shown high exposure to particulate matter increases respiratory infections, cardiovascular diseases, and premature mortality (Adhikary et al., 2024; Dockery & Pope, 1994). This report analyzes air quality data from Los Angeles County, which faces unique challenges (urban sprawl, vehicular emissions, wildfires, etc.) that potentially contribute to poor air quality.
+
+    Data originates from the EPA Air Quality Index (AQI) Report Database and Air Quality System (AQS) API (EPA, 1987-2023). These sources provide pollutant-level details, including ground-level ozone and particulate matter, which are vital for assessing environmental regulations and public health. This report aims to support public policy organizations such as the World Resources Institute, in enhancing urban development and environmental resilience by providing actionable insights in Los Angeles county air quality for policy formulation (World Resources Institute, n.d.).
+
+## 2. Primary Data Retrieval:
+
+#### Code for Primary Data Retrieval:
+
+```{r}
+# Checking if the primary data file already exists or if re-scraping is enabled
+if (re_scrape_primary_data || !file.exists(primary_data_file)) {
+  
+  # Defining the API endpoint
+  base_url <- "https://aqs.epa.gov/data/api/qaOnePointQcRawData/byCounty"
+  
+  # Defining static parameters for the query
+  param <- "44201"  # Ozone Pollutant code
+  state <- "06"  # California State code
+  county <- "037"  # Los Angeles County code
+  
+  # Initializing an empty data frame to store results
+  all_data <- data.frame()
+  
+  # Looping through each year in range
+  for (year in 1987:2023) {
+    # Defining the start and end dates for the year
+    bdate <- paste0(year, "0101")  # Start Date = January 1st 
+    edate <- paste0(year, "1231")  # End Date = December 31st
+    
+    # Defining parameters for query
+    params <- list(
+      email = email, 
+      key = api_key,
+      param = param, 
+      bdate = bdate,
+      edate = edate,
+      state = state,
+      county = county
+    )
+    
+    # Sending the GET request with the specified parameters
+    response <- GET(url = base_url, query = params)
+    
+    # Checking if the response status is successful
+    if (status_code(response) == 200) {
+      # Parsing the JSON response
+      data <- fromJSON(content(response, as = "text"), flatten = TRUE)
+      
+      # Checking if Data element exists
+      if (!is.null(data$Data)) {
+        # Converting the element into a data frame and appending it to "all_data"
+        year_data <- data$Data %>% as.data.frame()
+        all_data <- bind_rows(all_data, year_data)
+      } else {
+        # Printing a message in case no data is available for the year
+        print(paste("No data available for year:", year))
+      }
+    } else {
+      # Print error message if API request fails
+      print(paste("Error for year", year, ":", status_code(response), content(response, as = "text")))
+    }
+  }
+  # Saving the combined data into an RDS file
+  primary_data_rds <- saveRDS(all_data, primary_data_file_path_rds)
+  # Saving the combined data into an CSV file
+  primary_data_csv <- write.csv(all_data, primary_data_file_path_csv, row.names = FALSE)
+} else{
+  # Printing a message if re_scrape_primary_data <- FALSE
+  print("Skipping Rescraping")
+}
+
+```
+
+    The primary dataset consists of air quality measurements for Los Angeles County from 1987 to 2023, obtained through the EPA's AQS API. The data focuses on ozone (parameter code 44201), a significant pollutant in the region. Each record includes quality assurance checks and metadata to ensure reliability.
+
+    Data collection was conducted using R's httr and jsonlite libraries. The API was queried iteratively for each year, specifying the pollutant, location codes, and annual date ranges. The JSON responses were parsed into a tabular format and saved as a CSV and RDS file for reproducibility. The dataset qualifies as primary data since it was retrieved directly from the EPA's API, without third-party preprocessing.
+
+    While the dataset is robust and reliable, it is limited to ozone measurements and Los Angeles County, excluding other pollutants and broader geographic insights. However, these limitations align with the report's focus on a detailed analysis of a single county. Additional pollutants or broader geographic data could be incorporated through supplementary queries in future research.
+
+    The data collection adhered to ethical guidelines, utilizing the EPA's API with proper authentication and maintaining retrieval rates within acceptable limits to prevent misuse. This transparent and ethical approach ensures data integrity and supports reproducibility for future analyses.
+
+## 3. Secondary Data Retrieval
+
+#### Code for Secondary Data Collection:
+
+```{r}
+# Checking if the secondary data file already exists or if re-scraping is enabled
+if (re_scrape_secondary_data || !file.exists(secondary_data_file)) {
+  # Starting an Rselenium session with Firefox
+  rD <- rsDriver(browser = "firefox", port = 4445L, verbose = FALSE, chromever = NULL) # found the chromever = NULL code from stack overflow to fix error.
+  remote_driver <- rD$client
+  
+  # Initializing an empty data frame to store the results
+  all_years_data <- data.frame()
+  
+  # Defining the range of CSS selector numbers for year dropdown (descending from 40 to 4)
+  selector_numbers <- 40:4
+  
+  # Looping through each CSS selector number
+  for (selector_number in selector_numbers) {
+    
+    # Navigating to the EPA Air Quality Index Report URL
+    url <- "https://www.epa.gov/outdoor-air-quality-data/air-quality-index-report"
+    remote_driver$navigate(url)
+    Sys.sleep(2) # Following proper web scraping etiquette by creating pauses 
+  
+    # Selecting the year from the dropdown using the nth-child selector
+    year_dropdown <- remote_driver$findElement(using = "class", value = "form-item__select")
+    year_dropdown$clickElement() # Clicking year dropdown
+    Sys.sleep(2)
+    
+    year_option <- remote_driver$findElement(using = "css", 
+                                             value = paste0("#year > option:nth-child(", selector_number, ")"))
+    year_option$clickElement()
+    Sys.sleep(2)
+    
+    # Selecting County Dropdown
+    county_dropdown <- remote_driver$findElement(using = "id", value = "county")
+    county_dropdown$clickElement()
+    Sys.sleep(2)
+    
+    # Selecting Los Angeles County from the dropdown
+    la_county <- remote_driver$findElement(using = "xpath", 
+                                           value = "//select[@id='county']/option[text()='CA - Los Angeles']")
+    la_county$clickElement()
+    Sys.sleep(2)
+    
+    # Clicking on the Generate Report button
+    generate_report_button <- remote_driver$findElement(using = "css", value = "#launch > input:nth-child(1)")
+    generate_report_button$clickElement()
+    Sys.sleep(2)
+    
+    # Locating and extracting the table containign the report data
+    table_element <- remote_driver$findElement(using = "id", value = "mytable")
+    table_html <- table_element$getElementAttribute("outerHTML")[[1]] # Extracting the first table
+  
+    # Parsing the HTML table and converting it to a data frame
+    table_data <- read_html(table_html) %>%
+      html_table(fill = TRUE) %>%
+      .[[1]]
+    
+    # Calculating the corresponding year based on the selector number
+    year <- 2023 - abs(4 - selector_number) 
+    table_data$Year <- year # Adding the year as a new column
+    
+      # Standardize column types (converting all columns to character format first)
+    table_data <- table_data %>%
+      mutate(across(everything(), as.character))
+    
+    # Appending the data for this year to the combined dataset
+    all_years_data <- bind_rows(all_years_data, table_data)
+  }
+  # Saving the combined dataset to a CSV file
+  secondary_data_csv <- write.csv(all_years_data, secondary_data_file_path_csv, row.names = FALSE)
+  # Saving the combined dataset into an RDS file
+  secondary_data_rds <- saveRDS(all_years_data, secondary_data_file_path_rds)
+
+  
+} else{
+  # Printing a message if re_scrape_secondary_data <- FALSE
+  print("Skipping re-scraping.")
+}
+```
+
+    The secondary dataset consists of annual Air Quality Index (AQI) reports for Los Angeles County from 1987 to 2023, sourced from the EPA's AQI Report web portal via an automated web-scraping approach. The data was collected using the RSelenium library in R, which enabled interaction with the EPA's AQI portal. The script automated dropdown selections for each year and county, extracted tabular data, and compiled it into a single dataset. The data was saved as a CSV and RDS file for further analysis.
+
+    This dataset is considered secondary because it was accessed through a different interface (the web portal) rather than the API, and it provides a higher-level summary of air quality (AQI scores) instead of detailed pollutant measurements like the primary dataset. It complements the primary data by offering contextual information on overall air quality trends and public health implications.
+
+    The AQI data adds value by providing a broader perspective on air quality, which is easier to communicate to policymakers and the public. While the primary data focuses on specific pollutants, the secondary data enhances the understanding of air quality trends and their potential impacts. The web-scraping process adhered to ethical guidelines, respecting the portal's usage limits and minimizing server impact. All extracted data is publicly available and complies with the website's terms of service, ensuring transparency and data integrity.
+
+## 4. Data Transformations
+
+#### Primary Dataset Transformations:
+
+```{r}
+# Loading primary data from RDS file
+primary_data <- readRDS(primary_data_file_path_rds)
+
+# If you want to load the primary data csv file instead, comment the code above out and uncomment the following line
+# primary_data <- read.csv(primary_data_file_path_csv, stringsAsFactors = FALSE)
+
+
+# Converting date columns to Date format 
+primary_data$assessment_date <- as.Date(primary_data$assessment_date, "%Y-%m-%d")
+primary_data$date_of_last_change <- as.Date(primary_data$date_of_last_change, "%Y-%m-%d")
+
+# Categorizing air quality based on "monitor_concentration"
+primary_data <- primary_data %>%
+  mutate(
+    AQI_Category = case_when(
+      monitor_concentration <= 0.05 ~ "Good",
+      monitor_concentration <= 0.1 ~ "Moderate",
+      monitor_concentration <= 0.15 ~ "Unhealthy for Sensitive Groups",
+      monitor_concentration <= 0.2 ~ "Unhealthy",
+      TRUE ~ "Very Unhealthy"
+    )
+  )
+
+# Grouping data by city and calculating average and maximum "monitor_concentration"
+geo_summary <- primary_data %>%
+  group_by(city) %>%
+  summarize(
+    avg_concentration = mean(monitor_concentration, na.rm = TRUE), # Ignores NA values
+    max_concentration = max(monitor_concentration, na.rm = TRUE)
+  )
+
+# Calculating yearly averages of "monitor_concentration" 
+yearly_trends <- primary_data %>%
+  mutate(Year = format(assessment_date, "%Y")) %>% # Extracting year
+  group_by(Year) %>%
+  summarize(
+    avg_concentration = mean(monitor_concentration, na.rm = TRUE)
+  )
+
+
+# Adding a season column based on the month of "assessment_date"
+primary_data <- primary_data %>%
+  mutate(
+    season = case_when(
+      month(assessment_date) %in% c(12, 1, 2) ~ "Winter",
+      month(assessment_date) %in% c(3, 4, 5) ~ "Spring",
+      month(assessment_date) %in% c(6, 7, 8) ~ "Summer",
+      month(assessment_date) %in% c(9, 10, 11) ~ "Fall"
+    )
+  )
+
+# Adding a Year Column from "assessment_date"
+primary_data$Year <- year(primary_data$assessment_date)
+
+# Grouping data by Year and AQI_Category and counting occurrences for each combo
+aggregated_data <- primary_data %>%
+  group_by(Year, AQI_Category) %>%
+  summarise(Count = n(), .groups = 'drop')
+
+
+
+# Computing summary statistics for each city and making a dataframe to store it
+stat_aggregates <- primary_data %>%
+  group_by(city) %>%
+  summarize(
+    mean_concentration = mean(monitor_concentration, na.rm = TRUE),
+    median_concentration = median(monitor_concentration, na.rm = TRUE),
+    max_concentration = max(monitor_concentration, na.rm = TRUE)
+  )
+
+# Pivoting the data into a wide format, where the parameter "Ozone" is a column and the values are "monitor_concentration" 
+primary_data_wide <- primary_data %>%
+  pivot_wider(names_from = parameter, values_from = monitor_concentration)
+
+```
+
+#### Secondary Data Transformations:
+
+```{r}
+# Loading secondary data from CSV file
+secondary_data <- read.csv(secondary_data_file_path_csv, stringsAsFactors = FALSE)
+
+# If you want to load the secondary data rds file instead, comment the code above out and uncomment the following line:
+# secondary_data <- readRDS(secondary_data_file_path_rds)
+
+# Mutating the data for Analysis
+air_quality_data <- secondary_data %>%
+  mutate(
+    `AQI Median` = as.numeric(`AQI.Median`), # Converting columns to numeric values
+    `AQI Max` = as.numeric(`AQI.Max`),
+    `#Days with AQI` = as.numeric(`X.Days.with.AQI`),
+    `#Days Good` = as.numeric(`X.Days.Good`),
+    `#Days Moderate` = as.numeric(`X.Days.Moderate`),
+    `#Days Unhealthy` = as.numeric(`X.Days.Unhealthy`),
+    Percent_Good_Days = (`X.Days.Good` / `X.Days.with.AQI`) * 100, # Calculating percentages of air quality days 
+    Percent_Moderate_Days = (`X.Days.Moderate` / `X.Days.with.AQI`) * 100, # Could use for potential future analysis
+    Percent_Unhealthy_Days = (`X.Days.Unhealthy` / `X.Days.with.AQI`) * 100, # Could use for potential future analysis
+    `Air Quality Status` = case_when( # Using AQI Median values to classify air quality status
+      `AQI.Median` <= 50 ~ "Good",
+      `AQI.Median` <= 100 ~ "Moderate",
+      `AQI.Median` <= 150 ~ "Unhealthy for Sensitive Groups",
+      `AQI.Median` <= 200 ~ "Unhealthy",
+      `AQI.Median` <= 300 ~ "Very Unhealthy",
+      TRUE ~ "Hazardous"
+    )
+  )
+
+# Calculating annual AQI summary statistics
+aqi_summary <- air_quality_data %>%
+  group_by(Year) %>% 
+  summarize(
+    `AQI Average` = mean((`AQI.Median` + `AQI.Max`) / 2, na.rm = TRUE),
+    `AQI Median` = median(`AQI.Median`, na.rm = TRUE),
+    `AQI Max` = max(`AQI.Max`, na.rm = TRUE)
+  )
+
+
+```
+
+**Primary Data Transformations:**
+
+1.  Added AQI_Category to group monitor_concentration into levels: "Good," "Moderate," "Unhealthy for Sensitive Groups," "Unhealthy," and "Very Unhealthy."
+
+2.  Grouped data by city to calculate average and maximum monitor_concentration, identifying high-pollution areas (saved as geo_summary).
+
+3.  Extracted a Year column and calculated annual average monitor_concentration to track long-term trends.
+
+4.  Created a season column based on assessment_date to explore seasonal variations.
+
+5.  Transformed the dataset into a wide format for easier comparisons (using ozone as column names and monitor_concentration as values).
+
+6.  Converted assessment_date and date_of_last_change to Date format for consistency.
+
+**Secondary Data Transformations:**
+
+1.  Created three columns outlining the percentage of good, moderate, and unhealthy AQI days out of total AQI days.
+
+2.  Created an Air Quality Status column based on AQI Median.
+
+3.  Grouped data by Year to compute average, median, and maximum AQI values (saved as aqi_summary).
+
+4.  Converted AQI-related columns (e.g., AQI Median, AQI Max) to numeric types for accurate computations.
+
+## 5. Use of Data
+
+#### Code for Yearly Aveage Ozone Concentration Plot
+
+```{r}
+# Defining a file path for where the ozone plot will be saved
+ozone_plot_file <- file.path(output_dir, "yearly_avg_ozone_plot.png")
+
+# Creating a line plot of yearly average ozone concentrations 
+ozone_plot <- ggplot(data = yearly_trends, aes(x = as.numeric(Year), y = avg_concentration)) +
+  geom_line(color = "#0072B2") + # Color-blind friendly color 
+  # Labeling Title and axis'
+  labs(title = "Figure 1. Yearly Average Ozone Concentration in Los Angeles County",
+       x = "Year", y = "Average Concentration (ppm)") +
+  theme_minimal()
+
+
+ozone_plot # Displaying the plot
+```
+
+    The line plot shows the yearly average ozone concentration (ppm) in Los Angeles County from 1985 to 2023.
+
+    It highlights fluctuations in ozone levels, with sharp spikes in recent years possibly linked to increased pollution, wildfire smoke, or environmental changes. This trend reveals both periods of improvement and challenges which indicates the need for further investigation.
+
+#### Code for Trends in Air Quality Status Bar Plot
+
+```{r}
+# Defining a file path where the bar plot will be saved
+bar_plot_file_path <- file.path(output_dir, "aqi_over_years.png")
+
+# Creating a stacked bar plot of AQI category counts over the years
+bar_plot <- ggplot(aggregated_data, aes(x = Year, y = Count, fill = AQI_Category)) +
+  geom_bar(stat = "identity", position = "stack") +
+  labs(
+    title = "Figure 2. Trends in Air Quality Status Over the Years",
+    x = "Year",
+    y = "Number of Assessments",
+    fill = "AQI Category" # Labeling the Legend
+  ) +
+  scale_fill_manual(
+    values = c(
+      "Moderate" = "#0072B2",  # Blue
+      "Unhealthy for Sensitive Groups" = "#E69F00",  # Orange
+      "Very Unhealthy" = "#CC79A7"  # Purple
+    )
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) # Tilting the x-axis labels for readability
+
+bar_plot
+```
+
+    The bar plot displays the number of assessments for different AQI categories over time. It categorizes air quality into "Moderate," "Unhealthy for Sensitive Groups," and "Very Unhealthy."
+
+    The rise in "Very Unhealthy" assessments in recent years suggests growing concerns about declining air quality, likely due to wildfire activity and urban emissions. This visualization highlights the need for targeted mitigation efforts to address air pollution in vulnerable areas.
+
+#### Code for Seasonal Variation in Air Pollutant Box Plots
+
+```{r, warning=FALSE}
+# Defining a file path where the box plot will be saved
+boxplot_file_path <- file.path(output_dir, "seasonal_variation.png")
+
+# Creating a box plot showing the seasonal variations in air pollutant concentrations
+box_plot <- ggplot(primary_data, aes(x = season, y = monitor_concentration, fill = season)) + # Creating a box plot for each season
+  geom_boxplot() +
+  labs(
+    title = "Figure 3. Seasonal Variation in Air Pollutant Concentrations",
+    x = "Season",
+    y = "Monitor Concentration",
+    fill = "Season"
+  ) +
+  scale_fill_manual(
+    values = c(
+      "Winter" = "#0072B2",  # Blue
+      "Spring" = "#009E73",  # Green
+      "Summer" = "#E69F00",  # Orange
+      "Fall" = "#D55E00"     # Red
+    )
+  ) +
+  theme_minimal() 
+
+box_plot
+```
+
+    The boxplots show seasonal variations in pollutant concentrations across fall, spring, summer, and winter.
+
+    Seasonal trends appear to be similar to one another, which may indicate that pollutant concentration remains fairly consistent.
+
+#### Code for Bar chart of Average and Max concentrations by City
+
+```{r}
+# Defining a file path to save the bar chart
+bar_chart_file_path <- file.path(output_dir, "yearly_avg_ozone_plot.png")
+
+# Creating a bar chart of average and maximum concentrations by city
+bar_chart <- ggplot(geo_summary, aes(x = reorder(city, avg_concentration), y = avg_concentration)) +
+  geom_bar(stat = "identity", fill = "#0072B2") +
+  geom_point(aes(y = max_concentration), color = "#D55E00", size = 3) +
+  coord_flip() + # Flipping coordinates to make city names easier to read
+  labs(
+    title = "Average and Maximum Concentration by City",
+    x = "City",
+    y = "Concentration",
+    caption = "Red dots represent maximum concentrations" # Adding a caption for context
+  ) +
+  theme_minimal()
+
+
+bar_chart
+```
+
+    The bar chart shows average concentration levels across different cities, while the red dots indicate maximum concentration values for each city.
+
+    Cities like Lancaster have high average concentrations and maximum values, indicating persistent pollution. In contrast, cities like Burbank show lower averages but still experience occasional spikes.
+
+#### Code for Good Air Quality Days over Time Line Plot
+
+```{r}
+# Defining a file path for the line plot
+line_plot_file <- file.path(output_dir, "percent_good_air_line_plot.png")
+
+# Converting Year column to numeric
+air_quality_data$Year <- as.numeric(air_quality_data$Year)
+
+# Creating the line plot for percentage of "Good" air quality days over time
+good_air_line_plot <- ggplot(air_quality_data, aes(x = Year, y = Percent_Good_Days, group = 1)) +
+  geom_line(color = "#009E73", linewidth = 1) + # colorblind-friendly green to reflect good, healthy air
+  geom_point(color = "#009E73", size = 2) + # Using same color for points
+  labs(
+    title = "Figure 5. Percentage of 'Good' Air Quality Days Over Time",
+    x = "Year",
+    y = "Percentage of Good Days"
+  ) +
+  scale_x_continuous(breaks = seq(min(air_quality_data$Year), max(air_quality_data$Year), by = 5)) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) 
+
+good_air_line_plot
+```
+
+    The line plot shows the percentage of "Good" air quality days over several decades.
+
+    It highlights long-term trends, with improvements in the 1990s and early 2000s, a decline in the late 2000s, and a rise post-2020, suggesting recent air quality improvements.
+
+## 6. Data Storage
+
+#### Code for Storing Outputs
+
+```{r, warning=FALSE}
+# Code that saves primary and secondary data prior to transformations in code chunks located in sections 2 and 3, respectively.
+
+# Section 4: Saving tables in two different ways for better reproducibility and options
+
+# Saving the wide format primary data as an RDS file
+primary_transformed_rds <- file.path(derivative_data_dir, "transformed_primary_data.rds")
+saveRDS(primary_data_wide, primary_transformed_rds)
+
+# Saving the wide format primary data as a CSV file
+primary_transformed_csv <- file.path(derivative_data_dir, "transformed_primary_data.csv")
+write.csv(primary_data_wide, primary_transformed_csv, row.names = FALSE)
+
+# Saving the geographic summary data as a CSV file
+geo_location_csv <- file.path(derivative_data_dir, "geo_location_table.csv")
+write.csv(geo_summary, geo_location_csv, row.names = FALSE)
+
+# Saving the geographic summary data as an RDS file
+geo_location_rds <- file.path(derivative_data_dir, "geo_location_table.rds")
+saveRDS(geo_summary, geo_location_rds)
+
+# Saving the aggregated air quality data as a CSV file
+aggregated_data_csv <- file.path(derivative_data_dir, "aggregated_data.csv")
+write.csv(aggregated_data, aggregated_data_csv, row.names = FALSE)
+
+# Saving the aggregated air quality data as an RDS file
+aggregated_data_rds <- file.path(derivative_data_dir, "aggregated_data.rds")
+saveRDS(aggregated_data, aggregated_data_rds)
+
+# Saving the statistical summaries a CSV file
+stat_aggregates_csv <- file.path(derivative_data_dir, "stat_aggregates_data.csv")
+write.csv(stat_aggregates, stat_aggregates_csv, row.names = FALSE)
+
+# Saving the statistical summaries an RDS file
+stat_aggregates_rds <- file.path(derivative_data_dir, "stat_aggregates_data.rds")
+saveRDS(stat_aggregates, stat_aggregates_rds)
+
+# Saving the transformed secondary data as a CSV file
+transformed_secondary_csv <- file.path(derivative_data_dir, "transformed_secondary_data.csv")
+write.csv(air_quality_data, transformed_secondary_csv, row.names = FALSE)
+
+# Saving the transformed secondary data as an RDS file
+secondary_transformed_rds <- file.path(derivative_data_dir, "transformed_secondary_data.rds")
+saveRDS(air_quality_data, secondary_transformed_rds)
+
+# Saving the AQI summary table as a CSV file
+summary_aqi_csv <- file.path(derivative_data_dir, "summary_aqi_table.csv")
+write.csv(aqi_summary, summary_aqi_csv, row.names = FALSE)
+
+# Saving the AQI summary table as an RDS file
+summary_aqi_rds <- file.path(derivative_data_dir, "summary_aqi_table.rds")
+summary_aqi_rds <- saveRDS(aqi_summary, summary_aqi_rds)
+
+# Section 5: Saving Plots as Image Files
+
+# Saving the yearly average ozone concentration plot as a PNG file
+ggsave(filename = ozone_plot_file, plot = ozone_plot, width = 8, height = 6, units = "in", dpi = 300)
+
+# Saving the seasonal variation in air pollutant concentrations box plot as a PNG file
+ggsave(filename = boxplot_file_path, plot = box_plot, width = 8, height = 6, units = "in", dpi = 300)
+
+# Saving the bar chart showing avg and max concentrations by city as a PNG file
+ggsave(filename = bar_chart_file_path, plot = bar_chart, width = 8, height = 6, units = "in", dpi = 300)
+
+# Saving the stacked bar plot of AQI category trends over the years as a PNG file
+ggsave(filename = bar_plot_file_path, plot = bar_plot, width = 8, height = 6, units = "in", dpi = 300)
+
+# Saving the line plot of the percentage of good air quality days over time as a PNG file
+ggsave(filename = line_plot_file, plot = good_air_line_plot, width = 8, height = 6, units = "in", dpi = 300)
+```
+
+# 7. References
+
+    Adhikary, M., Mal, P. & Saikia, N. (2024). Exploring the link between particulate matter pollution and acute respiratory infection risk in children using generalized estimating equations analysis: a robust statistical approach. Environ Health 23, 12 <https://doi.org/10.1186/s12940-024-01049-3>
+
+    Dockery, D. W., & Pope, C. A. (1994). Acute respiratory effects of particulate air pollution. Annual Review of Public Health, 15, 107--132.
+
+    U.S. Environmental Protection Agency (EPA). (1987-2023). Air quality index report. Retrieved from <https://www.epa.gov/outdoor-air-quality-data/air-quality-index-report>
+
+    U.S. Environmental Protection Agency (EPA). (1987-2023). Air Quality System (AQS) API. Retrived from <https://aqs.epa.gov/aqsweb/documents/data_api.html#county>
+
+    World Resources Institute. (n.d.). Urban sustainability initiatives. Retrieved from <https://www.wri.org>
